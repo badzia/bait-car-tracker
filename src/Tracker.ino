@@ -2,20 +2,27 @@
 #include "BLOG.h"
 #include "MQTT.h"
 
+#define VERSION "2.0"
 #define DEBUG_MQTT_SERIAL_OUTPUT
 
-String mqtt_host = "mqtt.eclipse.org";
+String ver = VERSION;
+char deviceName[32] = "";
+char deviceId[32] = "";
+char mqtt_host[32] = "mqtt.eclipse.org";
 uint16_t mqtt_port = 1883;
-String mqtt_user = "tracker";
-String mqtt_password = "baitcar_tracker";
+char mqtt_user[32] = "tracker";
+char mqtt_password[32] = "baitcar_tracker";
 const char *mqtt_topics[] = { "mqtt/data", "mqtt/+/data", "baitcartracker/command" };
-
-String deviceId = "";
+const int IOpins[] = { D1, D2, D3, D4, D5, D6, D7, D8 };
 
 uint32_t lastMillisMS = 0;
-uint32_t publishIntervalMS = 60000;
+uint32_t loop_IntervalMS = 60000;
 uint32_t mqtt_lastConnectMS = 0;
-uint32_t mqtt_connectRetryMS = 5000;
+uint32_t mqtt_retryIntervalMS = 5000;
+uint32_t arm_lastMillisMS = 0;
+uint32_t arm_IntervalMS = 500;
+uint32_t workCounter = 0;
+bool isArm = false;
 
 MQTT mqttClient("server_name", 1883, mqtt_callback);
 BLOG blog(BLOG::LOG_LEVEL_TRACE);
@@ -49,10 +56,22 @@ void LOGE(const char* fmt, ...) {
 }
 
 void setup() {
+  Particle.variable("version", ver);
   Particle.variable("mqttServer", mqtt_host);
+  Particle.variable("deviceName", deviceName);
+  Particle.variable("deviceId", deviceId);
+  Particle.variable("armed", isArm);
+  Particle.variable("armInterval", arm_IntervalMS);
+  Particle.variable("loopInterval", loop_IntervalMS);
+  Particle.variable("mqttRetryInterval", mqtt_retryIntervalMS);
+  Particle.variable("workCounter", workCounter);
+
   Particle.function("setMQTTServer", mqtt_setServer);
   Particle.function("initMQTT", mqtt_init);
   Particle.function("restartMQTT", mqtt_restart);
+  Particle.function("setLoopInterval", setLoopInterval);
+  Particle.function("setArmInterval", setArmInterval);
+  Particle.function("setMQTTRetryInterval", setMqttRetryInterval);
   Particle.function("arm", arm);
   Particle.function("disarm", disarm);
   Particle.function("setOutput1", setOutput1);
@@ -66,51 +85,69 @@ void setup() {
   Particle.function("info", info);
   Particle.function("test", test);
 
-  deviceId = System.deviceID();
+  String s = System.deviceID();
+  s.toCharArray(deviceId, s.length()+1);
+
   blog.setLogTo(BLOG::LOG_TO_CONSOLE);
   blog.setLogLevel(BLOG::LOG_LEVEL_ALL);
+
+  Particle.subscribe("particle/device/name", handlerDeviceName, MY_DEVICES);
+  waitFor(Particle.connected, 300000);
+  for (uint32_t ms = millis(); millis() - ms < 3000; Particle.process());
+  Particle.publish("particle/device/name");
+  
+  workCounter = 0;
+}
+
+void handlerDeviceName(const char *topic, const char *data) {
+  LOGT("handlerDeviceName(%s, %s)", topic, data);
+  strncpy(deviceName, data, sizeof(deviceName)-1);
 }
 
 void loop() {
+  workCounter = workCounter + 1;
   if (Particle.connected()) {
-    if (!mqttClient.isConnected() && (millis() - mqtt_lastConnectMS >= mqtt_connectRetryMS)) {
-        mqtt_lastConnectMS = millis();
-        mqtt_init("");
-        mqtt_reconnect();
-      }
-      mqttClient.loop();
+    if (!mqttClient.isConnected() && (millis() - mqtt_lastConnectMS >= mqtt_retryIntervalMS)) {
+      mqtt_lastConnectMS = millis();
+      LOGI("Loop reconnect");
+      mqtt_init("");
+      mqtt_reconnect();
+    }
+    mqttClient.loop();
 
-      if (millis() - lastMillisMS >= publishIntervalMS) {
-        lastMillisMS = millis();
-        Particle.publish("I", "BaitCarTracker", PRIVATE);
+    if (millis() - lastMillisMS >= loop_IntervalMS) {
+      lastMillisMS = millis();
+      LOGI("Loop publish %ul", workCounter);
+      Particle.publish("I", "BaitCarTracker", PRIVATE);
 //          Particle.publish("gps", pubbuf, PRIVATE);
 //          snprintf(buf, sizeof(buf), "%f", gps.location.lat());
 //sprintf(resultstr, "{\"temp1\":%0.1f,\"temp2\":%0.1f}", temp1, temp2);
-      }
+    }
+    if (isArm && (millis() - arm_lastMillisMS >= arm_IntervalMS)) {
+      arm_lastMillisMS = millis();
+      LOGI("Arm publish");
+    }
   }
 }
 
 void mqtt_reconnect() {
   LOGT("mqtt_reconnect()");
   if(!mqttClient.isConnected()) {
-    LOGI("MQTT connecting to %s as %s:%s", mqtt_host.c_str(),  mqtt_user.c_str(), mqtt_password.c_str());
+    LOGI("MQTT connecting to %s as %s:%s", mqtt_host,  mqtt_user, mqtt_password);
     String id = "tracker_" + String(Time.now());
-    if (mqttClient.connect(id.c_str(), mqtt_user.c_str(), mqtt_password.c_str())) {
-      LOGI("connected to %s:%u", mqtt_host.c_str(), mqtt_port);
+    if (mqttClient.connect(id.c_str(), mqtt_user, mqtt_password)) {
+      LOGI("connected to %s:%u", mqtt_host, mqtt_port);
       mqtt_subscribe();
     } else {
-      LOGI("MQTT connect failed. Retry in %d seconds", mqtt_connectRetryMS);
-      //delay(mqtt_connectRetryMS);
+      LOGI("MQTT connect failed. Retry in %d seconds", mqtt_retryIntervalMS);
     }
   }
 }
 
 int mqtt_setServer(String host) {
   LOGT("mqtt_setServer(%s)", host.c_str());
-  mqtt_host = host;
-  char newhost[100];
-  mqtt_host.toCharArray(newhost, mqtt_host.length()+1);
-  mqttClient.setBroker(newhost, mqtt_port);
+  host.toCharArray(mqtt_host, host.length()+1);
+  mqttClient.setBroker(mqtt_host, mqtt_port);
   return 0;
 }
 
@@ -137,12 +174,21 @@ void mqtt_subscribe() {
 }
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   LOGT("mqtt_callback(%s, payload, %d)", topic, length);
+  
+  char topic2[50] = "mqtt/";
+  strcat(topic2, deviceName);
+  strcat(topic2, "/data");
+
+  if(strcmp(topic, topic2) != 0) {
+    LOGI("mqtt_callback wrong topic");
+    return;
+  }
+
   char p[length + 1];
   memcpy(p, payload, length);
   p[length] = NULL; 
+  
   LOGI("mqtt_callback command=%s", p);
-
-  //if(strcmp(topic, "mqtt/data") != 0) return;
 
   if(strcmp(p, "arm") == 0) {
     arm("");
@@ -152,10 +198,11 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   } else
   if(strstr(p, "setOutput")) {
     char * pch;
-    pch = strtok (p, ",");
+    pch = strtok (p, "/");
     if(pch != NULL) {
-      byte n = pch[strlen(pch)-1] - '0';
-      pch = strtok(NULL, ",");
+      pch = strtok(NULL, "/");
+      byte n = pch[0] - '0';
+      pch = strtok(NULL, "/");
       byte v = pch[0] - '0';
       setOutput(n, v);
     }
@@ -165,21 +212,39 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
+int setLoopInterval(String value) {
+  loop_IntervalMS = atoi(value);
+  return 0;
+}
+
+int setArmInterval(String value) {
+  arm_IntervalMS = atoi(value);
+  return 0;
+}
+
+int setMqttRetryInterval(String value) {
+  mqtt_retryIntervalMS = atoi(value);
+  return 0;
+}
+
 int arm(String command) {
   LOGT("arm()");
-
+  isArm = true;
+  LOGI("armed");
   return 0;
 }
 
 int disarm(String command) {
   LOGT("disarm()");
-
+  isArm = false;
+  LOGI("disarmed");
   return 0;
 }
 
 int setOutput(byte number, byte value) {
   LOGT("setOutput(%d, %d)", number, value);
-
+  digitalWrite(IOpins[number], (value==0)?LOW:HIGH);
+  LOGI("setOutput%d to %d", number, value);
   return 0;
 }
 
@@ -240,8 +305,8 @@ int info(String value) {
 int test(String value) {
   LOGT("test()");
   Serial.println("TEST OK");
-  Particle.publish("I", "TEST OK");
-  mqttClient.publish("baitcartracker/"+deviceId, "TEST OK");
+  Particle.publish("I", "TEST OK", PRIVATE);
+  mqttClient.publish(String::format("baitcartracker/%s",deviceId), "TEST OK");
   LOGI("TEST OK");
   return 0;
 }
