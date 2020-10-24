@@ -68,6 +68,7 @@ void MQTT::initialize(char* domain, uint8_t *ip, uint16_t port, int keepalive, v
 }
 
 void MQTT::setBroker(char* domain, uint16_t port) {
+//Serial.println(String::format("setBroker(%s,%d)",domain, port));
     if(isConnected()) {
         disconnect();
     }
@@ -100,17 +101,16 @@ bool MQTT::connect(const char *id, const char *user, const char *pass) {
 }
 
 bool MQTT::connect(const char *id, const char *user, const char *pass, const char* willTopic, EMQTT_QOS willQos, uint8_t willRetain, const char* willMessage, bool cleanSession, MQTT_VERSION version) {
-Serial.println(String::format("connect(%s, %s, %s, %s, %s)", id, user, pass, willTopic, willMessage));
+Serial.println(String::format("connect(%s, %s, %s)", id, user, pass));
 
     if (!isConnected()) {
-Serial.println(String::format("connect to %s:%d", this->domain, this->port));
+//Serial.println(String::format("connect to %s:%d", this->domain.c_str(), this->port));
         int result = 0;
         if (ip == NULL)
             result = _client.connect(this->domain.c_str(), this->port);
         else
             result = _client.connect(this->ip, this->port);
-
-Serial.println(String::format("connect %s, %d", this->domain, result));
+//Serial.println(String::format("connect %s, %d", this->domain.c_str(), result));
 
         if (result) {
             nextMsgId = 1;
@@ -181,7 +181,6 @@ Serial.println(String::format("connect %s, %d", this->domain, result));
                     lastInActivity = millis();
                     pingOutstanding = false;
                     debug_print(" Connect success\n");
-Serial.println(" Connect success");
                     return true;
                 } else {
                     // check EMQTT_CONNACK_RESPONSE code.
@@ -536,7 +535,6 @@ uint16_t MQTT::writeString(const char* string, uint8_t* buf, uint16_t pos) {
 bool MQTT::isConnected() {
     bool rc = (int)_client.connected();
     if (!rc) _client.stop();
-Serial.println(String::format("isConnected()=%s", (rc?"true":"false")));
     return rc;
 }
 

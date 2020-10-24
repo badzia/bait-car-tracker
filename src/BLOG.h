@@ -20,9 +20,9 @@ const char* logLevel2String(BLOG_LEVEL logLevel) {
     return logLevel < sizeof(enumLogLevel) ? enumLogLevel[logLevel] : "unknown";
 }
 typedef enum {
-    LOG_TO_CONSOLE = 1,
-    LOG_TO_PARTICLE = 2,
-    LOG_TO_MQTT = 3,
+    LOG_TO_CONSOLE = (0 << 1),
+    LOG_TO_PARTICLE = (1 << 1),
+    LOG_TO_MQTT = (2 << 1),
 } BLOG_TO;
 
 private:
