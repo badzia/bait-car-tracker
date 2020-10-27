@@ -21,8 +21,8 @@ const char* logLevel2String(BLOG_LEVEL logLevel) {
 }
 typedef enum {
     LOG_TO_CONSOLE = (0 << 1),
-    LOG_TO_PARTICLE = (1 << 1),
-    LOG_TO_MQTT = (2 << 1),
+    LOG_TO_MQTT = (1 << 1),
+    LOG_TO_PARTICLE = (2 << 1),
 } BLOG_TO;
 
 private:
@@ -43,7 +43,7 @@ public:
     void setLogTo(BLOG_TO logTo);
     void setParticleTopic(String topic);
     void setMqttTopic(String topic);
-    void setMqttClient(MQTT client);
+    void setMqttClient(MQTT &client);
     void logt(String log);
     void logi(String log);
     void loge(String log);

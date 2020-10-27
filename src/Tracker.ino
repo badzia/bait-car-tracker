@@ -5,11 +5,11 @@
 #include "AssetTracker.h"
 #include "ICM_20948.h"
 
-#define RELEASENUMBER 2
-#define VERSION "2.0"
+#define RELEASENUMBER 4
+#define VERSION "2.2"
 #define APP "BaitCarTracker"
-#define SPI_PORT SPI
-#define CS_PIN 2
+//#define SPI_PORT SPI
+//#define CS_PIN 2
 
 String ver = VERSION;
 String app = APP;
@@ -38,11 +38,16 @@ uint32_t workCounter = 0;
 bool isArm = false;
 bool isPendingDisarm = false;
 
+BLOG::BLOG_TO logger;
+int loggerInt = 0;
+BLOG::BLOG_LEVEL logLevel = BLOG::LOG_LEVEL_TRACE;
+int logLevelInt = (int)logLevel;
+
 MQTT mqttClient("mqtt.eclipse.org", 1883, mqtt_callback, 1024);
-BLOG blog(BLOG::LOG_LEVEL_TRACE);
+BLOG blog(logLevel);
 AssetTracker g = AssetTracker();
 FuelGauge fuelGauge;
-ICM_20948_SPI icm;
+//ICM_20948_SPI icm;
 
 //#define LOGT(format, ...) blog.logtt(format, __VA_ARGS__)
 //#define LOGI(format, ...) blog.logi(String::format(format, args))
@@ -73,19 +78,19 @@ void LOGE(const char* fmt, ...) {
 }
 
 void setup() {
-  pinMode(D1, OUTPUT);
-  pinMode(D2, OUTPUT);
-  pinMode(D3, OUTPUT);
-  pinMode(D4, OUTPUT);
-  pinMode(D5, OUTPUT);
-  pinMode(D6, OUTPUT);
-  pinMode(D7, OUTPUT);
-  pinMode(D8, OUTPUT);
-  pinMode(A1, OUTPUT);
-  pinMode(A2, OUTPUT);
-  pinMode(A3, OUTPUT);
-  pinMode(A4, OUTPUT);
-  pinMode(A5, OUTPUT);
+  pinMode(D1, INPUT_PULLDOWN);
+  pinMode(D2, INPUT_PULLDOWN);
+  pinMode(D3, INPUT_PULLDOWN);
+  pinMode(D4, INPUT_PULLDOWN);
+  pinMode(D5, INPUT_PULLDOWN);
+  pinMode(D6, INPUT_PULLDOWN);
+  pinMode(D7, INPUT_PULLDOWN);
+  pinMode(D8, INPUT_PULLDOWN);
+  pinMode(A1, INPUT);
+  pinMode(A2, INPUT);
+  pinMode(A3, INPUT);
+  pinMode(A4, INPUT);
+  pinMode(A5, INPUT);
 
   Particle.variable("version", ver);
   Particle.variable("firmware", firmware);
@@ -97,6 +102,8 @@ void setup() {
   Particle.variable("loopInterval", loop_IntervalMS);
   Particle.variable("mqttRetryInterval", mqtt_retryIntervalMS);
   Particle.variable("workCounter", workCounter);
+  Particle.variable("logger", loggerInt);
+  Particle.variable("logLevel", logLevelInt);
 
   Particle.function("setMQTTServer", mqtt_setServer);
   Particle.function("setMQTTPort", mqtt_setPort);
@@ -105,6 +112,7 @@ void setup() {
   Particle.function("setLoopInterval", setLoopInterval);
   Particle.function("setArmInterval", setArmInterval);
   Particle.function("setMQTTRetryInterval", setMqttRetryInterval);
+  Particle.function("setDeviceName", setDeviceName);
   Particle.function("arm", arm);
   Particle.function("disarm", disarm);
   Particle.function("setOutput1", setOutput1);
@@ -118,20 +126,30 @@ void setup() {
   Particle.function("info", info);
   Particle.function("load", load);
   Particle.function("save", save);
+  Particle.function("setLogger", setLogger);
+  Particle.function("setLogLevel", setLogLevel);
   Particle.function("test", test);
 
   String s = System.deviceID();
   s.toCharArray(deviceId, s.length()+1);
 
-  blog.setLogTo(BLOG::LOG_TO_CONSOLE);
-  blog.setLogLevel(BLOG::LOG_LEVEL_ALL);
+  logger = static_cast<BLOG::BLOG_TO>(static_cast<int>(BLOG::LOG_TO_CONSOLE) | static_cast<int>(BLOG::LOG_TO_MQTT));
+  loggerInt = (int)logger;
+  logLevel = BLOG::LOG_LEVEL_INFO;
+  logLevelInt = (int)logLevel;
+  blog.setLogTo(logger);
+  blog.setMqttClient(mqttClient);
+  blog.setMqttTopic("mqtt/log");
+  blog.setLogLevel(logLevel);
+
+  load("");
 
   g.begin();
   g.gpsOn();
 
-  SPI_PORT.begin();
-  icm.begin( CS_PIN, SPI_PORT );
-  LOGI("ICM status: %s", icm.statusString() );
+//  SPI_PORT.begin();
+//  icm.begin( CS_PIN, SPI_PORT );
+//  LOGI("ICM status: %s", icm.statusString() );
 // For future use
 //  Particle.subscribe("particle/device/name", handlerDeviceName, MY_DEVICES);
 //  waitFor(Particle.connected, 300000);
@@ -140,7 +158,8 @@ void setup() {
   
   workCounter = 0;
 
-  load("");
+
+  blog.setMqttTopic(String::format("mqtt/%s/log", deviceName));
 }
 // For future use
 //void handlerDeviceName(const char *topic, const char *data) {
@@ -241,6 +260,7 @@ int mqtt_init(String command) {
       if(pch != NULL) {
         strncpy(deviceName, pch, sizeof(deviceName));
       }
+      blog.setMqttTopic(String::format("mqtt/%s/log", deviceName));
       LOGI("mqtt_init host: %s , deviceName: %s", mqtt_host, deviceName);
     }
   }
@@ -333,6 +353,13 @@ int setMqttRetryInterval(String value) {
   return 0;
 }
 
+int setDeviceName(String value) {
+  LOGT("setDeviceName(%s)", value.c_str());
+  strncpy(deviceName, value.c_str(), sizeof(deviceName));
+  save("");
+  return 0;
+}
+
 int arm(String command) {
   LOGT("arm()");
   isArm = true;
@@ -352,10 +379,9 @@ int disarm(String command) {
 
 int setOutput(byte number, byte value) {
   LOGT("setOutput(%d, %d)", number, value);
-  pinMode(IOpins[number], INPUT);
-  digitalWrite(IOpins[number], (value==0)?LOW:HIGH);
-  LOGI("setOutput%d to %d", number, value);
-  pinMode(IOpins[number], OUTPUT);
+  pinMode(IOpins[number-1], OUTPUT);
+  digitalWrite(IOpins[number-1], (value==0)?LOW:HIGH);
+  LOGI("set D%d to %d", IOpins[number-1], (value==0)?LOW:HIGH);
   return 0;
 }
 
@@ -449,13 +475,13 @@ String getSignal() {
 String getTemperature() {
   LOGT("getTemperature()");
   float temp = 0;
-  if(icm.dataReady()){
-    LOGI("icm data ready");
-    icm.getAGMT();
-    temp = icm.temp();
-  } else {
-    LOGI("icm data not ready yet");
-  }
+  // if(icm.dataReady()){
+  //   LOGT("icm data ready");
+  //   icm.getAGMT();
+  //   temp = icm.temp();
+  // } else {
+  //   LOGT("icm data not ready yet");
+  // }
   String s = String::format("\"temp\":{\"cpu\":%.2f,\"board\":%.2f}", temp, 0);
   LOGT("getTemperature(): %s", s.c_str());
   return s;
@@ -478,7 +504,6 @@ String getLight() {
   return s;
 }
 
-//!!!!!!!!!!!!!!!
 String getMotion() {
   LOGT("getMotion()");
   float accx = 0;
@@ -491,21 +516,21 @@ String getMotion() {
   float magy = 0;
   float magz = 0;
 
-  if(icm.dataReady()){
-    LOGI("icm data ready");
-    icm.getAGMT();
-    accx = icm.accX();
-    accx = icm.accY();
-    accx = icm.accZ();
-    gyrx = icm.gyrX();
-    gyry = icm.gyrY();
-    gyrz = icm.gyrZ();
-    magx = icm.magX();
-    magy = icm.magY();
-    magz = icm.magZ();
-  } else {
-    LOGI("icm data not ready yet");
-  }
+  // if(icm.dataReady()){
+  //   LOGT("icm data ready");
+  //   icm.getAGMT();
+  //   accx = icm.accX();
+  //   accx = icm.accY();
+  //   accx = icm.accZ();
+  //   gyrx = icm.gyrX();
+  //   gyry = icm.gyrY();
+  //   gyrz = icm.gyrZ();
+  //   magx = icm.magX();
+  //   magy = icm.magY();
+  //   magz = icm.magZ();
+  // } else {
+  //   LOGT("icm data not ready yet");
+  // }
   String s = String::format("\"motion\":{\"accx\":%.2f,\"accy\":%.2f,\"accz\":%.2f,\"gyrox\":%.2f,\"gyroy\":%.2f,\"gyroz\":%.2f,\"magx\":%.2f,\"magy\":%.2f,\"magz\":%.2f}", accx, accy, accz, gyrx, gyry, gyrz, magx, magy, magz);
   LOGT("get(): %s", s.c_str());
   return s;
@@ -538,7 +563,7 @@ String getGps() {
   float lon = g.readLonDeg();
   float speed = g.getSpeed();
   uint32_t timestamp = g.getGpsTimestamp();
-  float head = calculateBearing(lat, lon, lastLat, lastLon);
+  float head = calculateBearing(lastLat, lastLon, lat, lon);
   lastLat = lat;
   lastLon = lon;
 
@@ -551,7 +576,7 @@ int test(String value) {
   LOGT("test()");
   Serial.println("TEST OK");
   Particle.publish("I", "TEST OK", PRIVATE);
-  mqttClient.publish(String::format("baitcartracker/%s",deviceId), "TEST OK");
+  mqttClient.publish(String::format("mqtt/%s/test",deviceId), "TEST OK");
   LOGI("TEST OK");
   return 0;
 }
@@ -575,6 +600,7 @@ struct Config {
   uint8_t number;
   char version[5];
   char host[32];
+  char deviceName[32];
   uint16_t port;
   uint8_t arm;
   uint32_t armInterval;
@@ -586,10 +612,12 @@ struct Config {
 int save(String value) {
   LOGT("save()");
   int addr = 0;
-  Config config = { RELEASENUMBER, "", "", mqtt_port, (isArm?1:0), arm_IntervalMS, loop_IntervalMS, mqtt_retryIntervalMS };
+  Config config = { RELEASENUMBER, "", "", "", mqtt_port, (uint8_t)(isArm?1:0), arm_IntervalMS, loop_IntervalMS, mqtt_retryIntervalMS };
   strncpy(config.version, ver.c_str(), sizeof(config.version));
   strncpy(config.host, mqtt_host, sizeof(config.host));
+  strncpy(config.deviceName, deviceName, sizeof(config.deviceName));
   EEPROM.put(addr, config);
+  return 0;
 }
 
 int load(String value) {
@@ -600,6 +628,7 @@ int load(String value) {
 
   if(config.number == RELEASENUMBER) {
     strncpy(mqtt_host, config.host, sizeof(config.host));
+    strncpy(deviceName, config.deviceName, sizeof(config.deviceName));
     mqtt_port = config.port;
     arm_IntervalMS = config.armInterval;
     loop_IntervalMS = config.loopInterval;
@@ -608,5 +637,23 @@ int load(String value) {
   } else {
     save("");
   }
+  return 0;
 }
 
+int setLogger(String value) {
+  LOGT("setLogger(%s)", value.c_str());
+  int v = atoi(value);
+  loggerInt = v;
+  BLOG::BLOG_TO logTo = static_cast<BLOG::BLOG_TO>(v);
+  blog.setLogTo(logTo);
+  return 0;
+}
+
+int setLogLevel(String value) {
+  LOGT("setLogLevel(%s)", value.c_str());
+  int v = atoi(value);
+  logLevelInt = v;
+  BLOG::BLOG_LEVEL logLevel = static_cast<BLOG::BLOG_LEVEL>(v);
+  blog.setLogLevel(logLevel);
+  return 0;
+}
